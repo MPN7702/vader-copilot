@@ -9,7 +9,6 @@ jobs:
   update-data:
     runs-on: ubuntu-latest
     
-    # Ger GitHub Actions tillåtelse att skriva och spara filer i ditt arkiv
     permissions:
       contents: write
       
@@ -20,7 +19,7 @@ jobs:
       - name: Installerar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24 # Uppdaterat till Node 24 för att matcha GitHubs nya krav!
 
       - name: Hämtar väderdata
         run: node fetch-weather.js
@@ -31,4 +30,3 @@ jobs:
           git config --global user.email 'actions@github.com'
           git add weather.json
           git diff --quiet && git diff --staged --quiet || (git commit -m "Uppdaterade väderdata" && git push)
-
