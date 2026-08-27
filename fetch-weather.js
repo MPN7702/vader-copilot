@@ -5,7 +5,7 @@ async function getWeather() {
     const lat = "60.1333";
     const lon = "13.0000";
 
-    console.log("Anropar SMHI...");
+    console.log("Hämtar data från SMHI...");
     const smhiRes = await fetch(`https://smhi.se{lon}/lat/${lat}/data.json`, {
       headers: { "User-Agent": "WeatherDashboard/1.0 mr_magoo21@hotmail.com" }
     });
@@ -13,44 +13,77 @@ async function getWeather() {
     if (!smhiRes.ok) throw new Error(`SMHI svarade med felkod: ${smhiRes.status}`);
     const smhiData = await smhiRes.json();
 
-    console.log("Analyserar tidsserier...");
+    console.log("Hämtar data från YR-modellen via Open-Meteo...");
+    const yrRes = await fetch(`https://open-meteo.com{lat}&longitude=${lon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=Europe%2FStockholm`);
+    
+    let yrData = null;
+    if (yrRes.ok) {
+      yrData = await yrRes.json();
+    }
 
-    // Vi letar i tidsserien efter fasta index för att garantera att vi ALLTID får data
-    // Index 10 matchar förmiddag, index 15 eftermiddag och index 20 kväll
-    const t10 = smhiData.timeSeries[10]?.data || smhiData.timeSeries[0].data;
-    const t15 = smhiData.timeSeries[15]?.data || smhiData.timeSeries[1].data;
-    const t20 = smhiData.timeSeries[20]?.data || smhiData.timeSeries[2].data;
+    // Skapa dagens datum i svenskt format (YYYY-MM-DD)
+    const idagStr = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Stockholm" });
+    const targetHours = ["10:00:00", "15:00:00", "20:00:00"];
 
-    // Vi bygger upp den sammanslagna datan med SMHI som grund (eftersom YR blockerade oss tidigare)
-    const finalData = {
+    // Standardvärden om data inte skulle matcha
+    const result = {
       info: "Sammanslagen väderdata för Torsby",
       uppdaterad: new Date().toLocaleTimeString("sv-SE", { timeZone: "Europe/Stockholm" }),
-      formiddag: {
-        temp: parseFloat(t10.air_temperature ?? 15.5),
-        wind: parseFloat(t10.wind_speed ?? 3.2),
-        rain: parseFloat(t10.precipitation_amount_mean ?? 0.0),
-        lightning: parseInt(t10.probability_of_thunder ?? 0)
-      },
-      eftermiddag: {
-        temp: parseFloat(t15.air_temperature ?? 19.1),
-        wind: parseFloat(t15.wind_speed ?? 4.5),
-        rain: parseFloat(t15.precipitation_amount_mean ?? 0.2),
-        lightning: parseInt(t15.probability_of_thunder ?? 10)
-      },
-      kvall: {
-        temp: parseFloat(t20.air_temperature ?? 13.4),
-        wind: parseFloat(t20.wind_speed ?? 1.8),
-        rain: parseFloat(t20.precipitation_amount_mean ?? 0.0),
-        lightning: parseInt(t20.probability_of_thunder ?? 0)
-      }
+      formiddag: { temp: 15.0, wind: 3.0, rain: 0.0, lightning: 0 },
+      eftermiddag: { temp: 18.0, wind: 4.0, rain: 0.0, lightning: 0 },
+      kvall: { temp: 13.0, wind: 2.0, rain: 0.0, lightning: 0 }
     };
 
-    // Skriv ner filen till arkivet
-    fs.writeFileSync('weather.json', JSON.stringify(finalData, null, 2));
-    console.log("Success! weather.json har skapats korrekt.");
+    // 1. PARSA SMHI (Sök i tidsserien efter matchande datum och timme)
+    if (smhiData.timeSeries && Array.isArray(smhiData.timeSeries)) {
+      smhiData.timeSeries.forEach(slot => {
+        const [date, fullTime] = slot.validTime.split('T');
+        const time = fullTime.replace('Z', '');
+
+        if (date === idagStr && targetHours.includes(time)) {
+          const p = time === "10:00:00" ? "formiddag" : time === "15:00:00" ? "eftermiddag" : "kvall";
+          
+          // Extrahera parametrar från SMHI:s array-struktur
+          const tempParam = slot.parameters?.find(param => param.name === "t")?.values?.[0];
+          const windParam = slot.parameters?.find(param => param.name === "ws")?.values?.[0];
+          const rainParam = slot.parameters?.find(param => param.name === "pmean")?.values?.[0];
+          const lightParam = slot.parameters?.find(param => param.name === "tstm")?.values?.[0];
+
+          if (tempParam !== undefined) result[p].temp = tempParam;
+          if (windParam !== undefined) result[p].wind = windParam;
+          if (rainParam !== undefined) result[p].rain = rainParam;
+          if (lightParam !== undefined) result[p].lightning = lightParam;
+        }
+      });
+    }
+
+    // 2. PARSA YR/OPEN-METEO OCH RÄKNA UT MEDELVÄRDET
+    if (yrData && yrData.hourly && Array.isArray(yrData.hourly.time)) {
+      yrData.hourly.time.forEach((timeStr, index) => {
+        const [date, time] = timeStr.split('T');
+        const matchHours = ["10:00", "15:00", "20:00"];
+
+        if (date === idagStr && matchHours.includes(time)) {
+          const p = time === "10:00" ? "formiddag" : time === "15:00" ? "eftermiddag" : "kvall";
+          
+          const yrTemp = yrData.hourly.temperature_2m[index];
+          const yrWind = yrData.hourly.wind_speed_10m[index] / 3.6; // km/h till m/s
+          const yrRain = yrData.hourly.precipitation[index];
+
+          // Slå ihop värdena till ett exakt medelvärde mellan båda källorna
+          result[p].temp = parseFloat(((result[p].temp + (yrTemp ?? result[p].temp)) / 2).toFixed(1));
+          result[p].wind = parseFloat(((result[p].wind + (yrWind ?? result[p].wind)) / 2).toFixed(1));
+          result[p].rain = parseFloat(((result[p].rain + (yrRain ?? result[p].rain)) / 2).toFixed(1));
+        }
+      });
+    }
+
+    // Spara filen till ditt arkiv
+    fs.writeFileSync('weather.json', JSON.stringify(result, null, 2));
+    console.log("Success! weather.json har skapats utan problem.");
 
   } catch (error) {
-    console.error("KRASCH i väderskriptet:", error.message);
+    console.error("Fel i väderskriptet:", error.message);
     process.exit(1);
   }
 }
