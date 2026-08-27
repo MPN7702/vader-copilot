@@ -9,8 +9,10 @@ jobs:
   update-data:
     runs-on: ubuntu-latest
     
+    # Vi ger roboten tillgång till att både spara filer och göra Copilot-anrop!
     permissions:
       contents: write
+      copilot-requests: write # Aktiverar GitHubs inbyggda Copilot AI
       
     steps:
       - name: Klonar arkiv
@@ -19,14 +21,25 @@ jobs:
       - name: Installerar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24 # Uppdaterat till Node 24 för att matcha GitHubs nya krav!
+          node-version: 24
 
-      - name: Hämtar väderdata
+      - name: 1. Hämtar väderdata (SMHI & YR)
         run: node fetch-weather.js
 
-      - name: Sparar data till GitHub
+      - name: 2. Installerar GitHub Copilot CLI
+        run: npm install -g @github/copilot # Installerar Copilots officiella kommandoverktyg
+
+      - name: 3. Låter Copilot göra en väderbedömning
+        run: |
+          # Vi skickar in texten från weather.json till Copilot och ber om en bedömning
+          DATA=$(cat weather.json)
+          copilot -p "Analysera följande väderdata för Torsby: $DATA. Skriv en sammanfattande bedömning på svenska i löpande text (2-3 meningar) om hur dagen blir samt en risknivå (Låg, Medel eller Hög)." > copilot-assessment.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Använder GitHubs inbyggda gratis-token!
+
+      - name: 4. Sparar alla filer till GitHub
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
-          git add weather.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Uppdaterade väderdata" && git push)
+          git add weather.json copilot-assessment.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Uppdaterade väder och Copilot-analys" && git push)
