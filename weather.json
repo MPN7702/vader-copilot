@@ -1,0 +1,22 @@
+{
+  "info": "Sammanslagen väderdata för Torsby",
+  "uppdaterad": "23:31:35",
+  "formiddag": {
+    "temp": 16.5,
+    "wind": 3.2,
+    "rain": 0,
+    "lightning": 0
+  },
+  "eftermiddag": {
+    "temp": 19.1,
+    "wind": 4.5,
+    "rain": 0.2,
+    "lightning": 10
+  },
+  "kvall": {
+    "temp": 13.4,
+    "wind": 1.8,
+    "rain": 0,
+    "lightning": 0
+  }
+}
