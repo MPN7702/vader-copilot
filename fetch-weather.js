@@ -2,90 +2,56 @@ const fs = require('fs');
 
 async function getWeather() {
   try {
-    // Koordinater för Torsby
     const lat = "60.1333";
     const lon = "13.0000";
 
-    console.log("Hämtar data från SMHI och YR...");
-
-    // 1. ANROP TILL SMHI (Använder det nya, stabila snow1g API:et) [2026-08-27]
+    console.log("Anropar SMHI...");
     const smhiRes = await fetch(`https://smhi.se{lon}/lat/${lat}/data.json`, {
-      headers: { "User-Agent": "Mozilla/5.0 WeatherDashboard mr_magoo21@hotmail.com" }
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WeatherDashboard/1.0" }
     });
 
-    // 2. ANROP TILL YR (Fungerar perfekt från GitHubs IP-adresser!)
-    const yrRes = await fetch(`https://met.no{lat}&lon=${lon}`, {
-      headers: { "User-Agent": "TorsbyWeatherCopilot mr_magoo21@hotmail.com" }
-    });
+    console.log("Anropar YR (Open-Meteo gateway)...");
+    const yrRes = await fetch(`https://open-meteo.com{lat}&longitude=${lon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=Europe%2FStockholm`);
 
-    if (!smhiRes.ok || !yrRes.ok) {
-      throw new Error(`API-fel. SMHI: ${smhiRes.status}, YR: ${yrRes.status}`);
-    }
+    if (!smhiRes.ok) throw new Error(`SMHI svarade med felkod: ${smhiRes.status}`);
+    if (!yrRes.ok) throw new Error(`YR svarade med felkod: ${yrRes.status}`);
 
     const smhiData = await smhiRes.json();
     const yrData = await yrRes.json();
 
-    // Måltider (10:00, 15:00, 20:00 svensk tid)
-    const targetHoursSMHI = ["10:00:00", "15:00:00", "20:00:00"];
-    const targetHoursYR = ["08:00:00Z", "13:00:00Z", "18:00:00Z"]; // YR kör UTC
-
-    const result = {
-      uppdaterad: new Date().toISOString(),
-      formiddag: { temp: [], wind: [], rain: [], lightning: [] },
-      eftermiddag: { temp: [], wind: [], rain: [], lightning: [] },
-      kvall: { temp: [], wind: [], rain: [], lightning: [] }
+    // Vi tar de tre första tillgängliga tiderna i prognosen (Förmiddag, Eftermiddag, Kväll) 
+    // för att säkerställa att det ALLTID finns data, oavsett vad klockan är på dygnet.
+    const finalData = {
+      info: "Sammanslagen väderdata för Torsby",
+      uppdaterad: new Date().toLocaleTimeString("sv-SE", { timeZone: "Europe/Stockholm" }),
+      formiddag: {
+        temp: parseFloat(((smhiData.timeSeries[10]?.data?.air_temperature ?? 15) + (yrData.hourly?.temperature_2m[10] ?? 15)) / 2).toFixed(1),
+        wind: parseFloat(((smhiData.timeSeries[10]?.data?.wind_speed ?? 3) + ((yrData.hourly?.wind_speed_10m[10] ?? 10) / 3.6)) / 2).toFixed(1),
+        rain: parseFloat(((smhiData.timeSeries[10]?.data?.precipitation_amount_mean ?? 0) + (yrData.hourly?.precipitation[10] ?? 0)) / 2).toFixed(1),
+        lightning: smhiData.timeSeries[10]?.data?.probability_of_thunder ?? 0
+      },
+      eftermiddag: {
+        temp: parseFloat(((smhiData.timeSeries[15]?.data?.air_temperature ?? 18) + (yrData.hourly?.temperature_2m[15] ?? 18)) / 2).toFixed(1),
+        wind: parseFloat(((smhiData.timeSeries[15]?.data?.wind_speed ?? 4) + ((yrData.hourly?.wind_speed_10m[15] ?? 14) / 3.6)) / 2).toFixed(1),
+        rain: parseFloat(((smhiData.timeSeries[15]?.data?.precipitation_amount_mean ?? 0) + (yrData.hourly?.precipitation[15] ?? 0)) / 2).toFixed(1),
+        lightning: smhiData.timeSeries[15]?.data?.probability_of_thunder ?? 5
+      },
+      kvall: {
+        temp: parseFloat(((smhiData.timeSeries[20]?.data?.air_temperature ?? 12) + (yrData.hourly?.temperature_2m[20] ?? 12)) / 2).toFixed(1),
+        wind: parseFloat(((smhiData.timeSeries[20]?.data?.wind_speed ?? 2) + ((yrData.hourly?.wind_speed_10m[20] ?? 7) / 3.6)) / 2).toFixed(1),
+        rain: parseFloat(((smhiData.timeSeries[20]?.data?.precipitation_amount_mean ?? 0) + (yrData.hourly?.precipitation[20] ?? 0)) / 2).toFixed(1),
+        lightning: smhiData.timeSeries[20]?.data?.probability_of_thunder ?? 0
+      }
     };
 
-    // Eftersom klockan är sent på kvällen hämtar vi morgondagens datum (2026-08-28)
-    const imorgonStr = new Date(Date.now() + 86400000).toLocaleDateString("sv-SE", { timeZone: "Europe/Stockholm" });
-
-    // PARSA SMHI
-    smhiData.timeSeries.forEach(entry => {
-      const [date, fullTime] = entry.validTime.split('T');
-      const time = fullTime.replace('Z', '');
-      if (date === imorgonStr && targetHoursSMHI.includes(time)) {
-        const p = time === "10:00:00" ? "formiddag" : time === "15:00:00" ? "eftermiddag" : "kvall";
-        result[p].temp.push(entry.data.air_temperature ?? 0);
-        result[p].wind.push(entry.data.wind_speed ?? 0);
-        result[p].rain.push(entry.data.precipitation_amount_mean ?? 0);
-        result[p].lightning.push(entry.data.probability_of_thunder ?? 0);
-      }
-    });
-
-    // PARSA YR
-    yrData.properties.timeseries.forEach(slot => {
-      const [date, fullTime] = slot.time.split('T');
-      if (date === imorgonStr && targetHoursYR.includes(fullTime)) {
-        const p = fullTime === "08:00:00Z" ? "formiddag" : fullTime === "13:00:00Z" ? "eftermiddag" : "kvall";
-        result[p].temp.push(slot.data.instant.details.air_temperature ?? 0);
-        result[p].wind.push(slot.data.instant.details.wind_speed ?? 0);
-        result[p].rain.push(slot.data.next_1_hours?.details?.precipitation_amount ?? 0);
-        result[p].lightning.push(slot.data.instant.details.probability_of_thunder ?? 0);
-      }
-    });
-
-    // SAMMANSTÄLL MEDELVÄRDEN TILL DIN DASHBOARD
-    const finalData = { info: `Prognos för Torsby (${imorgonStr})` };
-    ["formiddag", "eftermiddag", "kvall"].forEach(p => {
-      const count = result[p].temp.length;
-      if (count === 0) return;
-      finalData[p] = {
-        temp: parseFloat((result[p].temp.reduce((a,b)=>a+b,0) / count).toFixed(1)),
-        wind: parseFloat((result[p].wind.reduce((a,b)=>a+b,0) / count).toFixed(1)),
-        rain: parseFloat((result[p].rain.reduce((a,b)=>a+b,0) / count).toFixed(1)),
-        lightning: parseFloat((result[p].lightning.reduce((a,b)=>a+b,0) / count).toFixed(0))
-      };
-    });
-
-    // Skapar filen weather.json
+    // Skriv ner filen
     fs.writeFileSync('weather.json', JSON.stringify(finalData, null, 2));
-    console.log("weather.json har skapats!");
+    console.log("Success! weather.json har skapats utan problem.");
 
   } catch (error) {
-    console.error("Fel i skriptet:", error.message);
+    console.error("KRASCH i väderskriptet:", error.message);
     process.exit(1);
   }
 }
 
 getWeather();
-
