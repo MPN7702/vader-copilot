@@ -9,10 +9,8 @@ jobs:
   update-data:
     runs-on: ubuntu-latest
     
-    # Vi ger roboten tillgång till att både spara filer och göra Copilot-anrop!
     permissions:
       contents: write
-      copilot-requests: write # Aktiverar GitHubs inbyggda Copilot AI
       
     steps:
       - name: Klonar arkiv
@@ -26,18 +24,29 @@ jobs:
       - name: 1. Hämtar väderdata (SMHI & YR)
         run: node fetch-weather.js
 
-      - name: 2. Installerar GitHub Copilot CLI
-        run: npm install -g @github/copilot # Installerar Copilots officiella kommandoverktyg
-
-      - name: 3. Låter Copilot göra en väderbedömning
+      - name: 2. Låter GitHubs AI göra en väderbedömning
         run: |
-          # Vi skickar in texten från weather.json till Copilot och ber om en bedömning
-          DATA=$(cat weather.json)
-          copilot -p "Analysera följande väderdata för Torsby: $DATA. Skriv en sammanfattande bedömning på svenska i löpande text (2-3 meningar) om hur dagen blir samt en risknivå (Låg, Medel eller Hög)." > copilot-assessment.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Använder GitHubs inbyggda gratis-token!
+          # Läser in väderdatan vi precis skapade
+          DATA=$(cat weather.json | tr -d '\n' | tr -d '"')
+          
+          # Gör ett direkt anrop till GitHubs kostnadsfria AI-ändpunkt med din GITHUB_TOKEN
+          curl -X POST "https://azure.com" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"gpt-4o-mini\",
+              \"messages\": [
+                {\"role\": \"system\", \"content\": \"Du är en meteorolog som sammanfattar väderdata kort på svenska.\"},
+                {\"role\": \"user\", \"content\": \"Gör en kort bedömning på 2-3 meningar av följande väder samt sätt en risknivå (Låg, Medel eller Hög): $DATA\"}
+              ],
+              \"temperature\": 0.3
+            }" > ai-response.json
+            
+          # Extraherar ut textsvaret till vår textfil
+          cat ai-response.json | grep -o '"content":"[^"]*' | head -n 1 | sed 's/"content":"//' > copilot-assessment.txt
+        continue-on-error: true # Om AI-tjänsten är överbelastad sparar vi ändå väderdatan
 
-      - name: 4. Sparar alla filer till GitHub
+      - name: 3. Sparar alla filer till GitHub
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
